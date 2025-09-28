@@ -3,12 +3,16 @@ package indexer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"seekfile/internal/storage"
 )
 
 // FileRecord describes metadata captured for a file on disk.
@@ -29,15 +33,58 @@ type Query struct {
 	ModifiedBefore time.Time
 }
 
+// ScanMode indicates how a scan should be executed.
+type ScanMode string
+
+const (
+	// ScanModeIncremental updates the index by checking for differences from the current snapshot.
+	ScanModeIncremental ScanMode = "incremental"
+	// ScanModeFull rebuilds the index from scratch.
+	ScanModeFull ScanMode = "full"
+)
+
+// ErrScanInProgress is returned when attempting to start a scan while one is already running.
+var ErrScanInProgress = errors.New("scan already in progress")
+
+// ScanStatus summarizes the current or most recent scan activity.
+type ScanStatus struct {
+	Mode              string    `json:"mode"`
+	Running           bool      `json:"running"`
+	CurrentPath       string    `json:"currentPath"`
+	Processed         int64     `json:"processed"`
+	KnownFiles        int       `json:"knownFiles"`
+	StartedAt         time.Time `json:"startedAt"`
+	FinishedAt        time.Time `json:"finishedAt"`
+	LastSuccessfulRun time.Time `json:"lastSuccessfulRun"`
+	Error             string    `json:"error,omitempty"`
+}
+
+// RecordStore describes the persistence operations required by the indexer.
+type RecordStore interface {
+	LoadAll(ctx context.Context) ([]storage.Record, error)
+	Upsert(ctx context.Context, record storage.Record) error
+	Delete(ctx context.Context, path string) error
+	ScanState(ctx context.Context, root string) (storage.ScanState, error)
+	UpdateScanState(ctx context.Context, state storage.ScanState) error
+}
+
 // Indexer builds and maintains an in-memory representation of files on disk.
 type Indexer struct {
 	mu        sync.RWMutex
 	files     map[string]FileRecord
 	scanRoots []string
+
+	store RecordStore
+
+	statusMu sync.RWMutex
+	status   ScanStatus
+
+	scanMu     sync.Mutex
+	scanCancel context.CancelFunc
 }
 
-// New constructs an Indexer for the provided root directories.
-func New(scanRoots []string) (*Indexer, error) {
+// New constructs an Indexer for the provided root directories backed by the supplied store.
+func New(scanRoots []string, store RecordStore) (*Indexer, error) {
 	if len(scanRoots) == 0 {
 		return nil, errors.New("at least one scan root is required")
 	}
@@ -60,43 +107,117 @@ func New(scanRoots []string) (*Indexer, error) {
 	return &Indexer{
 		files:     make(map[string]FileRecord),
 		scanRoots: normalized,
+		store:     store,
 	}, nil
 }
 
-// BuildInitialIndex walks through the configured roots and captures file metadata.
-func (idx *Indexer) BuildInitialIndex(ctx context.Context) error {
-	for _, root := range idx.scanRoots {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+// LoadFromStore restores the in-memory index from the persistent cache.
+func (idx *Indexer) LoadFromStore(ctx context.Context) (int, error) {
+	if idx.store == nil {
+		return 0, nil
+	}
 
-		walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				// Continue walking on errors but capture the first one encountered.
-				return nil
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return nil
-			}
-			record := FileRecord{
-				Path:     filepath.Clean(path),
-				Name:     info.Name(),
-				Size:     info.Size(),
-				ModTime:  info.ModTime(),
-				RootPath: root,
-			}
-			idx.upsert(record)
-			return nil
-		})
-		if walkErr != nil {
-			return walkErr
+	records, err := idx.store.LoadAll(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	data := make(map[string]FileRecord, len(records))
+	for _, record := range records {
+		normalized := filepath.Clean(record.Path)
+		data[normalized] = FileRecord{
+			Path:     normalized,
+			Name:     record.Name,
+			Size:     record.Size,
+			ModTime:  record.ModTime,
+			RootPath: record.RootPath,
 		}
 	}
+
+	idx.mu.Lock()
+	idx.files = data
+	idx.mu.Unlock()
+
+	var lastRun time.Time
+	if idx.store != nil {
+		for _, root := range idx.scanRoots {
+			state, stateErr := idx.store.ScanState(ctx, root)
+			if stateErr != nil {
+				continue
+			}
+			if state.LastFullScan.After(lastRun) {
+				lastRun = state.LastFullScan
+			}
+			if state.LastIncrementalScan.After(lastRun) {
+				lastRun = state.LastIncrementalScan
+			}
+		}
+	}
+
+	idx.updateStatus(func(status *ScanStatus) {
+		status.LastSuccessfulRun = lastRun
+		status.Mode = string(ScanModeIncremental)
+		status.Processed = 0
+		status.Error = ""
+	})
+
+	return len(records), nil
+}
+
+// StartScan triggers a background scan using the provided mode. Only one scan may run at a time.
+func (idx *Indexer) StartScan(ctx context.Context, mode ScanMode) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	idx.statusMu.Lock()
+	if idx.status.Running {
+		idx.statusMu.Unlock()
+		return ErrScanInProgress
+	}
+	idx.status = ScanStatus{
+		Mode:        string(mode),
+		Running:     true,
+		StartedAt:   time.Now(),
+		Processed:   0,
+		KnownFiles:  idx.countFiles(),
+		FinishedAt:  time.Time{},
+		Error:       "",
+		CurrentPath: "",
+	}
+	idx.statusMu.Unlock()
+
+	scanCtx, cancel := context.WithCancel(ctx)
+
+	idx.scanMu.Lock()
+	if idx.scanCancel != nil {
+		idx.scanCancel()
+	}
+	idx.scanCancel = cancel
+	idx.scanMu.Unlock()
+
+	go idx.runScan(scanCtx, mode)
 	return nil
+}
+
+// StopScan cancels an in-flight scan if one is running.
+func (idx *Indexer) StopScan() {
+	idx.scanMu.Lock()
+	defer idx.scanMu.Unlock()
+	if idx.scanCancel != nil {
+		idx.scanCancel()
+		idx.scanCancel = nil
+	}
+}
+
+// Status returns a snapshot of the current scan status along with the number of indexed files.
+func (idx *Indexer) Status() ScanStatus {
+	idx.statusMu.RLock()
+	status := idx.status
+	idx.statusMu.RUnlock()
+
+	status.KnownFiles = idx.countFiles()
+	return status
 }
 
 // Search returns a slice of FileRecord that match the query parameters.
@@ -145,29 +266,231 @@ func (idx *Indexer) Roots() []string {
 // UpdateFile updates metadata for a single file. It is intended to be used by
 // filesystem watchers to keep the index fresh.
 func (idx *Indexer) UpdateFile(record FileRecord) {
-	idx.upsert(record)
+	_ = idx.saveRecord(context.Background(), record)
 }
 
 // RemoveFile removes a file from the index by its path.
 func (idx *Indexer) RemoveFile(path string) {
-	normalized := filepath.Clean(path)
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	delete(idx.files, normalized)
+	_ = idx.deleteRecord(context.Background(), path)
 }
 
-// TODO: implement background filesystem watching to keep the index in sync.
-// func (idx *Indexer) StartWatching(ctx context.Context) error {
-//     return errors.New("watching not yet implemented")
-// }
+func (idx *Indexer) runScan(ctx context.Context, mode ScanMode) {
+	defer func() {
+		idx.scanMu.Lock()
+		idx.scanCancel = nil
+		idx.scanMu.Unlock()
+	}()
 
-func (idx *Indexer) upsert(record FileRecord) {
+	var firstErr error
+	processed := int64(0)
+	seen := make(map[string]struct{})
+	scannedRoots := make(map[string]struct{})
+	rootStates := make(map[string]storage.ScanState)
+	if idx.store != nil {
+		for _, root := range idx.scanRoots {
+			state, err := idx.store.ScanState(ctx, root)
+			if err != nil {
+				continue
+			}
+			rootStates[root] = state
+		}
+	}
+
+	for _, root := range idx.scanRoots {
+		select {
+		case <-ctx.Done():
+			firstErr = ctx.Err()
+			idx.updateStatus(func(status *ScanStatus) {
+				status.Error = ctx.Err().Error()
+			})
+			break
+		default:
+		}
+
+		if err := idx.walkRoot(ctx, root, mode, seen, &processed); err != nil {
+			if errors.Is(err, context.Canceled) {
+				firstErr = ctx.Err()
+				break
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+
+		scannedRoots[root] = struct{}{}
+
+		if idx.store != nil {
+			timestamp := time.Now()
+			state := rootStates[root]
+			switch mode {
+			case ScanModeFull:
+				state.LastFullScan = timestamp
+				state.LastIncrementalScan = timestamp
+			default:
+				state.LastIncrementalScan = timestamp
+			}
+			state.RootPath = root
+			if err := idx.store.UpdateScanState(ctx, state); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+
+	if len(scannedRoots) > 0 {
+		if err := idx.removeMissing(ctx, seen, scannedRoots); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	finish := time.Now()
+
+	idx.updateStatus(func(status *ScanStatus) {
+		status.Running = false
+		status.FinishedAt = finish
+		status.Processed = processed
+		status.CurrentPath = ""
+		if firstErr != nil {
+			status.Error = firstErr.Error()
+		} else {
+			status.Error = ""
+			status.LastSuccessfulRun = finish
+		}
+	})
+}
+
+func (idx *Indexer) walkRoot(ctx context.Context, root string, mode ScanMode, seen map[string]struct{}, processed *int64) error {
+	walker := func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if entry.IsDir() {
+			return nil
+		}
+
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return nil
+		}
+
+		normalized := filepath.Clean(path)
+		*processed++
+		seen[normalized] = struct{}{}
+
+		idx.updateStatus(func(status *ScanStatus) {
+			status.Processed = *processed
+			status.CurrentPath = normalized
+		})
+
+		if mode == ScanModeIncremental {
+			if existing, ok := idx.Lookup(normalized); ok {
+				if existing.Size == info.Size() && existing.ModTime.Equal(info.ModTime()) {
+					return nil
+				}
+			}
+		}
+
+		record := FileRecord{
+			Path:     normalized,
+			Name:     info.Name(),
+			Size:     info.Size(),
+			ModTime:  info.ModTime(),
+			RootPath: root,
+		}
+
+		if err := idx.saveRecord(ctx, record); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	return filepath.WalkDir(root, walker)
+}
+
+func (idx *Indexer) removeMissing(ctx context.Context, seen map[string]struct{}, scannedRoots map[string]struct{}) error {
+	idx.mu.RLock()
+	candidates := make([]string, 0)
+	for path, record := range idx.files {
+		if _, ok := scannedRoots[record.RootPath]; !ok {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		candidates = append(candidates, path)
+	}
+	idx.mu.RUnlock()
+
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+
+		if err := idx.deleteRecord(ctx, path); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (idx *Indexer) saveRecord(ctx context.Context, record FileRecord) error {
 	normalized := filepath.Clean(record.Path)
 	record.Path = normalized
 
 	idx.mu.Lock()
-	defer idx.mu.Unlock()
 	idx.files[normalized] = record
+	idx.mu.Unlock()
+
+	if idx.store == nil {
+		return nil
+	}
+
+	storageRecord := storage.Record{
+		Path:     record.Path,
+		Name:     record.Name,
+		Size:     record.Size,
+		ModTime:  record.ModTime,
+		RootPath: record.RootPath,
+	}
+
+	return idx.store.Upsert(ctx, storageRecord)
+}
+
+func (idx *Indexer) deleteRecord(ctx context.Context, path string) error {
+	normalized := filepath.Clean(path)
+
+	idx.mu.Lock()
+	delete(idx.files, normalized)
+	idx.mu.Unlock()
+
+	if idx.store == nil {
+		return nil
+	}
+
+	return idx.store.Delete(ctx, normalized)
+}
+
+func (idx *Indexer) countFiles() int {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return len(idx.files)
+}
+
+func (idx *Indexer) updateStatus(update func(*ScanStatus)) {
+	idx.statusMu.Lock()
+	update(&idx.status)
+	idx.statusMu.Unlock()
 }
 
 func matchesQuery(record FileRecord, query Query) bool {
@@ -189,4 +512,19 @@ func matchesQuery(record FileRecord, query Query) bool {
 		return false
 	}
 	return true
+}
+
+// ParseScanMode validates a scan mode string and falls back to the incremental mode when empty.
+func ParseScanMode(mode string) (ScanMode, error) {
+	if mode == "" {
+		return ScanModeIncremental, nil
+	}
+	switch strings.ToLower(mode) {
+	case string(ScanModeFull):
+		return ScanModeFull, nil
+	case string(ScanModeIncremental):
+		return ScanModeIncremental, nil
+	default:
+		return "", fmt.Errorf("unknown scan mode %q", mode)
+	}
 }

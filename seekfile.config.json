@@ -3,5 +3,6 @@
   "scan_paths": [
     "."
   ],
-  "rebuild_on_start": false
+  "rebuild_on_start": false,
+  "database_path": "./seekfile.db"
 }
