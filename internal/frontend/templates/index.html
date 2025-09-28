@@ -13,6 +13,21 @@
         <p class="sf-tagline">极速检索与下载 Linux 文件</p>
     </header>
     <main class="sf-main">
+        <section class="sf-scan">
+            <div class="sf-scan-header">
+                <div>
+                    <h2>扫描控制</h2>
+                    <p class="sf-scan-subtitle">随时启动增量或全量扫描，并查看实时进度</p>
+                </div>
+                <div class="sf-scan-actions">
+                    <button type="button" id="scan-incremental">增量扫描</button>
+                    <button type="button" id="scan-full">全量重建</button>
+                </div>
+            </div>
+            <div id="scan-status" class="sf-scan-status">
+                <p>正在加载扫描状态...</p>
+            </div>
+        </section>
         <section class="sf-search">
             <form id="search-form">
                 <div class="sf-field">
@@ -58,6 +73,10 @@
     (function() {
         const form = document.getElementById('search-form');
         const tbody = document.getElementById('results-body');
+        const scanStatusBox = document.getElementById('scan-status');
+        const incrementalButton = document.getElementById('scan-incremental');
+        const fullButton = document.getElementById('scan-full');
+        let statusTimer = null;
 
         function formatSize(bytes) {
             if (bytes === 0) return '0 B';
@@ -69,6 +88,13 @@
         }
 
         function formatDate(value) {
+            const date = new Date(value);
+            if (isNaN(date.getTime())) return '';
+            return date.toLocaleString();
+        }
+
+        function formatDateTime(value) {
+            if (!value || value === '0001-01-01T00:00:00Z') return '';
             const date = new Date(value);
             if (isNaN(date.getTime())) return '';
             return date.toLocaleString();
@@ -97,6 +123,81 @@
             });
         }
 
+        function setScanButtonsDisabled(disabled) {
+            incrementalButton.disabled = disabled;
+            fullButton.disabled = disabled;
+        }
+
+        function renderScanStatus(status) {
+            if (!status) {
+                scanStatusBox.innerHTML = '<p class="sf-error">无法读取扫描状态</p>';
+                return;
+            }
+
+            setScanButtonsDisabled(Boolean(status.running));
+
+            const parts = [];
+            parts.push(`<p><strong>模式：</strong>${status.mode || 'incremental'}</p>`);
+            parts.push(`<p><strong>已索引文件：</strong>${status.knownFiles || 0}</p>`);
+
+            if (status.running) {
+                parts.push(`<p><strong>开始时间：</strong>${formatDateTime(status.startedAt)}</p>`);
+                parts.push(`<p><strong>已处理文件：</strong>${status.processed || 0}</p>`);
+                const currentPath = status.currentPath ? `<span class="sf-current-path">${status.currentPath}</span>` : '-';
+                parts.push(`<p><strong>当前文件：</strong>${currentPath}</p>`);
+            } else {
+                const finishedText = formatDateTime(status.finishedAt) || formatDateTime(status.lastSuccessfulRun);
+                parts.push(`<p><strong>最近完成：</strong>${finishedText || '-'}</p>`);
+                parts.push(`<p><strong>最后成功：</strong>${formatDateTime(status.lastSuccessfulRun)}</p>`);
+            }
+
+            if (status.error) {
+                parts.push(`<p class="sf-error"><strong>错误：</strong>${status.error}</p>`);
+            }
+
+            scanStatusBox.innerHTML = parts.join('');
+        }
+
+        function fetchScanStatus() {
+            fetch('/api/status')
+                .then(response => {
+                    if (!response.ok) throw new Error('状态获取失败');
+                    return response.json();
+                })
+                .then(renderScanStatus)
+                .catch(error => {
+                    scanStatusBox.innerHTML = '<p class="sf-error">' + error.message + '</p>';
+                });
+        }
+
+        function triggerScan(mode) {
+            setScanButtonsDisabled(true);
+            fetch('/api/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: mode })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.text().then(text => {
+                            throw new Error(text || '触发扫描失败');
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data && data.status) {
+                        renderScanStatus(data.status);
+                    } else {
+                        fetchScanStatus();
+                    }
+                })
+                .catch(error => {
+                    scanStatusBox.innerHTML = '<p class="sf-error">' + error.message + '</p>';
+                    setScanButtonsDisabled(false);
+                });
+        }
+
         form.addEventListener('submit', function(event) {
             event.preventDefault();
             const formData = new FormData(form);
@@ -115,6 +216,17 @@
                     tbody.innerHTML = '<tr><td colspan="5" class="error">' + error.message + '</td></tr>';
                 });
         });
+
+        incrementalButton.addEventListener('click', function() {
+            triggerScan('incremental');
+        });
+
+        fullButton.addEventListener('click', function() {
+            triggerScan('full');
+        });
+
+        fetchScanStatus();
+        statusTimer = setInterval(fetchScanStatus, 5000);
     })();
     </script>
 </body>

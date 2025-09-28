@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -19,11 +20,12 @@ import (
 type Server struct {
 	index    *indexer.Indexer
 	renderer *frontend.Renderer
+	baseCtx  context.Context
 }
 
 // New creates a Server instance backed by the provided indexer and renderer.
 func New(idx *indexer.Indexer, renderer *frontend.Renderer) *Server {
-	return &Server{index: idx, renderer: renderer}
+	return &Server{index: idx, renderer: renderer, baseCtx: context.Background()}
 }
 
 // Routes returns the HTTP handler that exposes the application endpoints.
@@ -32,12 +34,19 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/download", s.handleDownload)
+	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/scan", s.handleScan)
 	mux.Handle("/static/", http.StripPrefix("/static/", s.renderer.StaticHandler()))
 	return mux
 }
 
 // Start runs the HTTP server until the provided context is cancelled.
 func (s *Server) Start(ctx context.Context, addr string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.baseCtx = ctx
+
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: s.Routes(),
@@ -138,6 +147,52 @@ func (s *Server) isWithinRoots(path string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	status := s.index.Status()
+	writeJSON(w, status)
+}
+
+func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload struct {
+		Mode string `json:"mode"`
+	}
+
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	mode, err := indexer.ParseScanMode(payload.Mode)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := s.index.StartScan(s.baseCtx, mode); err != nil {
+		if errors.Is(err, indexer.ErrScanInProgress) {
+			http.Error(w, "scan already in progress", http.StatusConflict)
+			return
+		}
+		http.Error(w, fmt.Sprintf("start scan: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{"status": s.index.Status()})
 }
 
 func isSubPath(root, target string) bool {

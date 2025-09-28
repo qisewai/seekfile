@@ -48,6 +48,72 @@ body {
     box-shadow: 0 6px 16px rgba(31, 60, 136, 0.12);
 }
 
+.sf-scan {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 6px 16px rgba(31, 60, 136, 0.12);
+}
+
+.sf-scan-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.sf-scan-header h2 {
+    margin: 0 0 0.25rem 0;
+}
+
+.sf-scan-subtitle {
+    margin: 0;
+    color: #4b5563;
+    font-size: 0.95rem;
+}
+
+.sf-scan-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.sf-scan-actions button {
+    background: #1f3c88;
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    padding: 0.6rem 1.2rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.sf-scan-actions button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(31, 60, 136, 0.18);
+}
+
+.sf-scan-actions button:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.sf-scan-status p {
+    margin: 0.35rem 0;
+}
+
+.sf-current-path {
+    font-family: 'Fira Code', 'Courier New', monospace;
+    word-break: break-all;
+}
+
+.sf-error {
+    color: #b91c1c;
+}
+
 .sf-field-group {
     display: flex;
     gap: 1rem;

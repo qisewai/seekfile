@@ -21,6 +21,9 @@ type Config struct {
 	// The flag is included for future extensibility and currently has no effect
 	// beyond signaling intent.
 	RebuildOnStart bool
+
+	// DatabasePath specifies where the on-disk index cache is stored.
+	DatabasePath string
 }
 
 // FromFlags parses configuration from command line flags. It should be called
@@ -61,6 +64,7 @@ func FromFile(path string) (Config, error) {
 		ListenAddr     string   `json:"listen_addr"`
 		ScanPaths      []string `json:"scan_paths"`
 		RebuildOnStart bool     `json:"rebuild_on_start"`
+		DatabasePath   string   `json:"database_path"`
 	}
 
 	if err := decoder.Decode(&raw); err != nil {
@@ -78,10 +82,23 @@ func FromFile(path string) (Config, error) {
 		return Config{}, err
 	}
 
+	databasePath := strings.TrimSpace(raw.DatabasePath)
+	if databasePath == "" {
+		databasePath = filepath.Join(baseAbs, "seekfile.db")
+	} else if !filepath.IsAbs(databasePath) {
+		databasePath = filepath.Join(baseAbs, databasePath)
+	}
+
+	dbAbs, err := filepath.Abs(databasePath)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve database path %q: %w", databasePath, err)
+	}
+
 	cfg := Config{
 		ListenAddr:     strings.TrimSpace(raw.ListenAddr),
 		ScanPaths:      paths,
 		RebuildOnStart: raw.RebuildOnStart,
+		DatabasePath:   filepath.Clean(dbAbs),
 	}
 
 	if cfg.ListenAddr == "" {
