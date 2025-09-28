@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,18 @@ import (
 	"seekfile/internal/frontend"
 	"seekfile/internal/indexer"
 )
+
+const (
+	defaultPageSize = 20
+	maxPageSize     = 200
+)
+
+var categoryExtensions = map[string][]string{
+	"documents": {".txt", ".md", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv"},
+	"images":    {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp", ".tiff"},
+	"audio":     {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma"},
+	"video":     {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
+}
 
 // Server wires together HTTP handlers for the API and embedded frontend.
 type Server struct {
@@ -93,7 +106,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	queryValues := r.URL.Query()
 	idxQuery := indexer.Query{
-		NameContains: queryValues.Get("query"),
+		NamePattern: strings.TrimSpace(queryValues.Get("query")),
 	}
 	if minSizeStr := queryValues.Get("minSize"); minSizeStr != "" {
 		if minSize, err := strconv.ParseInt(minSizeStr, 10, 64); err == nil {
@@ -106,11 +119,58 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	categories := queryValues["category"]
+	if exts := resolveCategoryExtensions(categories); len(exts) > 0 {
+		idxQuery.Extensions = exts
+	}
+
+	sortField := strings.TrimSpace(queryValues.Get("sort"))
+	if sortField != "" {
+		idxQuery.SortField = sortField
+	}
+	idxQuery.SortDescending = strings.EqualFold(queryValues.Get("order"), "desc")
+
+	page := parsePositiveInt(queryValues.Get("page"), 1)
+	pageSize := clampPageSize(parsePositiveInt(queryValues.Get("pageSize"), defaultPageSize))
+	if page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * pageSize
+	idxQuery.Offset = offset
+	idxQuery.Limit = pageSize
+
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	files := s.index.Search(ctx, idxQuery)
-	writeJSON(w, map[string]any{"files": files})
+	result := s.index.Search(ctx, idxQuery)
+
+	totalPages := 0
+	if pageSize > 0 && result.Total > 0 {
+		totalPages = (result.Total + pageSize - 1) / pageSize
+	}
+
+	if totalPages > 0 && page > totalPages {
+		page = totalPages
+		idxQuery.Offset = (page - 1) * pageSize
+		result = s.index.Search(ctx, idxQuery)
+	}
+
+	sortFieldResponse := idxQuery.SortField
+	if sortFieldResponse == "" {
+		sortFieldResponse = "name"
+	}
+
+	response := map[string]any{
+		"files":      result.Files,
+		"total":      result.Total,
+		"page":       page,
+		"pageSize":   pageSize,
+		"totalPages": totalPages,
+		"sort":       sortFieldResponse,
+		"order":      ternary(idxQuery.SortDescending, "desc", "asc"),
+	}
+
+	writeJSON(w, response)
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -208,4 +268,61 @@ func writeJSON(w http.ResponseWriter, payload any) {
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		http.Error(w, fmt.Sprintf("encode response: %v", err), http.StatusInternalServerError)
 	}
+}
+
+func parsePositiveInt(value string, fallback int) int {
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func clampPageSize(size int) int {
+	if size <= 0 {
+		return defaultPageSize
+	}
+	if size > maxPageSize {
+		return maxPageSize
+	}
+	return size
+}
+
+func resolveCategoryExtensions(categories []string) []string {
+	if len(categories) == 0 {
+		return nil
+	}
+	extSet := make(map[string]struct{})
+	for _, raw := range categories {
+		category := strings.ToLower(strings.TrimSpace(raw))
+		if category == "" || category == "all" {
+			return nil
+		}
+		extensions, ok := categoryExtensions[category]
+		if !ok {
+			continue
+		}
+		for _, ext := range extensions {
+			extSet[ext] = struct{}{}
+		}
+	}
+	if len(extSet) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(extSet))
+	for ext := range extSet {
+		result = append(result, ext)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func ternary(cond bool, trueVal, falseVal string) string {
+	if cond {
+		return trueVal
+	}
+	return falseVal
 }
