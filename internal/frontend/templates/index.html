@@ -30,9 +30,7 @@
                         <p>正在加载扫描状态...</p>
                     </div>
                 </section>
-            </aside>
-            <section class="sf-content">
-                <div class="sf-search-card">
+                <section class="sf-search-card">
                     <div class="sf-search-header">
                         <h2>文件检索</h2>
                         <p class="sf-hint">支持使用 <code>*</code> 和 <code>?</code> 通配符，例如：<code>*.log</code>、<code>report_??.pdf</code></p>
@@ -65,15 +63,17 @@
                             <button type="submit">立即检索</button>
                         </div>
                     </form>
-                </div>
+                </section>
+            </aside>
+            <section class="sf-content">
                 <div class="sf-results">
                     <div class="sf-results-toolbar">
                         <div class="sf-page-size">
                             <label for="page-size">每页显示</label>
                             <select id="page-size">
                                 <option value="10">10</option>
-                                <option value="20" selected>20</option>
-                                <option value="50">50</option>
+                                <option value="20">20</option>
+                                <option value="50" selected>50</option>
                                 <option value="100">100</option>
                             </select>
                         </div>
@@ -140,7 +140,7 @@
 
         const state = {
             page: 1,
-            pageSize: parseInt(pageSizeSelect.value, 10) || 20,
+            pageSize: parseInt(pageSizeSelect.value, 10) || 50,
             sortField: 'name',
             sortOrder: 'asc',
             total: 0,
