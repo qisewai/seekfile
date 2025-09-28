@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -25,44 +27,93 @@ type Config struct {
 // by the main package to construct the initial configuration for the
 // application.
 func FromFlags() (Config, error) {
-	var cfg Config
-	var scanPaths string
+	var configPath string
 
-	flag.StringVar(&cfg.ListenAddr, "listen", ":8080", "HTTP listen address")
-	flag.StringVar(&scanPaths, "scan-paths", ".", "comma separated list of directories to index")
-	flag.BoolVar(&cfg.RebuildOnStart, "reindex", false, "force rebuilding the index on start")
+	flag.StringVar(&configPath, "config", "seekfile.config.json", "path to JSON configuration file")
 	flag.Parse()
 
-	paths, err := normalizeScanPaths(scanPaths)
+	return FromFile(configPath)
+}
+
+// FromFile loads the application configuration from the provided JSON file
+// path. Relative scan paths are resolved relative to the configuration file's
+// directory, ensuring they work regardless of the process working directory.
+func FromFile(path string) (Config, error) {
+	if strings.TrimSpace(path) == "" {
+		return Config{}, fmt.Errorf("configuration file path cannot be empty")
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve configuration path %q: %w", path, err)
+	}
+
+	file, err := os.Open(absPath)
+	if err != nil {
+		return Config{}, fmt.Errorf("open configuration file %q: %w", absPath, err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+
+	var raw struct {
+		ListenAddr     string   `json:"listen_addr"`
+		ScanPaths      []string `json:"scan_paths"`
+		RebuildOnStart bool     `json:"rebuild_on_start"`
+	}
+
+	if err := decoder.Decode(&raw); err != nil {
+		return Config{}, fmt.Errorf("decode configuration: %w", err)
+	}
+
+	baseDir := filepath.Dir(absPath)
+	baseAbs, err := filepath.Abs(baseDir)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve configuration directory %q: %w", baseDir, err)
+	}
+
+	paths, err := normalizeScanPaths(raw.ScanPaths, baseAbs)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.ScanPaths = paths
+
+	cfg := Config{
+		ListenAddr:     strings.TrimSpace(raw.ListenAddr),
+		ScanPaths:      paths,
+		RebuildOnStart: raw.RebuildOnStart,
+	}
+
+	if cfg.ListenAddr == "" {
+		cfg.ListenAddr = ":8080"
+	}
 
 	return cfg, nil
 }
 
-func normalizeScanPaths(raw string) ([]string, error) {
-	parts := strings.Split(raw, ",")
-	normalized := make([]string, 0, len(parts))
-	for _, part := range parts {
+func normalizeScanPaths(raw []string, baseDir string) ([]string, error) {
+	normalized := make([]string, 0, len(raw))
+	for _, part := range raw {
 		trimmed := strings.TrimSpace(part)
 		if trimmed == "" {
 			continue
 		}
-		abs, err := filepath.Abs(trimmed)
+
+		candidate := trimmed
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(baseDir, candidate)
+		}
+
+		abs, err := filepath.Abs(candidate)
 		if err != nil {
 			return nil, fmt.Errorf("resolve scan path %q: %w", trimmed, err)
 		}
+
 		normalized = append(normalized, filepath.Clean(abs))
 	}
 
 	if len(normalized) == 0 {
-		abs, err := filepath.Abs(".")
-		if err != nil {
-			return nil, fmt.Errorf("resolve working directory: %w", err)
-		}
-		normalized = append(normalized, filepath.Clean(abs))
+		normalized = append(normalized, filepath.Clean(baseDir))
 	}
 
 	return normalized, nil

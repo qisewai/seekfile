@@ -1,0 +1,7 @@
+{
+  "listen_addr": ":8080",
+  "scan_paths": [
+    "."
+  ],
+  "rebuild_on_start": false
+}
