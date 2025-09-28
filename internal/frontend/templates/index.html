@@ -1,0 +1,122 @@
+{{define "index.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SeekFile</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+    <header class="sf-header">
+        <h1>SeekFile</h1>
+        <p class="sf-tagline">极速检索与下载 Linux 文件</p>
+    </header>
+    <main class="sf-main">
+        <section class="sf-search">
+            <form id="search-form">
+                <div class="sf-field">
+                    <label for="query">关键字</label>
+                    <input id="query" name="query" type="search" placeholder="文件名关键字" />
+                </div>
+                <div class="sf-field-group">
+                    <div class="sf-field">
+                        <label for="min-size">最小大小 (字节)</label>
+                        <input id="min-size" name="minSize" type="number" min="0" />
+                    </div>
+                    <div class="sf-field">
+                        <label for="max-size">最大大小 (字节)</label>
+                        <input id="max-size" name="maxSize" type="number" min="0" />
+                    </div>
+                </div>
+                <button type="submit">检索</button>
+            </form>
+        </section>
+        <section class="sf-results">
+            <table>
+                <thead>
+                    <tr>
+                        <th>文件名</th>
+                        <th>路径</th>
+                        <th>大小</th>
+                        <th>修改时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="results-body">
+                    <tr>
+                        <td colspan="5" class="placeholder">请先检索文件</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+    <footer class="sf-footer">
+        <small>© {{.Year}} SeekFile</small>
+    </footer>
+    <script>
+    (function() {
+        const form = document.getElementById('search-form');
+        const tbody = document.getElementById('results-body');
+
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const k = 1024;
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            const value = bytes / Math.pow(k, i);
+            return value.toFixed(1) + ' ' + units[i];
+        }
+
+        function formatDate(value) {
+            const date = new Date(value);
+            if (isNaN(date.getTime())) return '';
+            return date.toLocaleString();
+        }
+
+        function renderRows(files) {
+            tbody.innerHTML = '';
+            if (!files.length) {
+                const row = document.createElement('tr');
+                row.innerHTML = '<td colspan="5" class="placeholder">未找到匹配文件</td>';
+                tbody.appendChild(row);
+                return;
+            }
+
+            files.forEach(file => {
+                const row = document.createElement('tr');
+                const link = `/api/download?path=${encodeURIComponent(file.path)}`;
+                row.innerHTML = `
+                    <td data-label="文件名">${file.name}</td>
+                    <td data-label="路径" class="sf-path">${file.path}</td>
+                    <td data-label="大小">${formatSize(file.size)}</td>
+                    <td data-label="修改时间">${formatDate(file.modified)}</td>
+                    <td data-label="操作"><a href="${link}" download>下载</a></td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        form.addEventListener('submit', function(event) {
+            event.preventDefault();
+            const formData = new FormData(form);
+            const params = new URLSearchParams();
+            for (const [key, value] of formData.entries()) {
+                if (value) params.append(key, value);
+            }
+
+            fetch('/api/search?' + params.toString())
+                .then(response => {
+                    if (!response.ok) throw new Error('搜索失败');
+                    return response.json();
+                })
+                .then(data => renderRows(data.files || []))
+                .catch(error => {
+                    tbody.innerHTML = '<tr><td colspan="5" class="error">' + error.message + '</td></tr>';
+                });
+        });
+    })();
+    </script>
+</body>
+</html>
+{{end}}
