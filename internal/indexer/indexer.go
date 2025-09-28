@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,11 +27,22 @@ type FileRecord struct {
 
 // Query defines the search criteria supported by the indexer.
 type Query struct {
-	NameContains   string
+	NamePattern    string
 	MinSize        int64
 	MaxSize        int64
 	ModifiedAfter  time.Time
 	ModifiedBefore time.Time
+	SortField      string
+	SortDescending bool
+	Offset         int
+	Limit          int
+	Extensions     []string
+}
+
+// SearchResult describes the outcome of a search request.
+type SearchResult struct {
+	Files []FileRecord
+	Total int
 }
 
 // ScanMode indicates how a scan should be executed.
@@ -221,28 +233,76 @@ func (idx *Indexer) Status() ScanStatus {
 }
 
 // Search returns a slice of FileRecord that match the query parameters.
-func (idx *Indexer) Search(ctx context.Context, query Query) []FileRecord {
+func (idx *Indexer) Search(ctx context.Context, query Query) SearchResult {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
+
+	nameMatcher := buildNameMatcher(query.NamePattern)
+
+	allowedExts := make(map[string]struct{})
+	if len(query.Extensions) > 0 {
+		for _, ext := range query.Extensions {
+			normalized := strings.ToLower(strings.TrimSpace(ext))
+			if normalized == "" {
+				continue
+			}
+			if !strings.HasPrefix(normalized, ".") {
+				normalized = "." + normalized
+			}
+			allowedExts[normalized] = struct{}{}
+		}
+	}
 
 	matches := make([]FileRecord, 0)
 	for _, record := range idx.files {
 		if ctx.Err() != nil {
 			break
 		}
-		if !matchesQuery(record, query) {
+		if !matchesQuery(record, query, nameMatcher, allowedExts) {
 			continue
 		}
 		matches = append(matches, record)
 	}
 
 	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].Name == matches[j].Name {
-			return matches[i].Path < matches[j].Path
+		cmp := compareRecords(matches[i], matches[j], query.SortField)
+		if cmp == 0 {
+			cmp = strings.Compare(strings.ToLower(matches[i].Name), strings.ToLower(matches[j].Name))
+			if cmp == 0 {
+				if matches[i].Path == matches[j].Path {
+					return false
+				}
+				return matches[i].Path < matches[j].Path
+			}
 		}
-		return matches[i].Name < matches[j].Name
+
+		if query.SortDescending {
+			return cmp > 0
+		}
+		return cmp < 0
 	})
-	return matches
+
+	total := len(matches)
+
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+
+	limit := query.Limit
+	if limit <= 0 || offset+limit > total {
+		limit = total - offset
+	}
+
+	paged := matches
+	if offset != 0 || limit != total {
+		paged = matches[offset : offset+limit]
+	}
+
+	return SearchResult{Files: paged, Total: total}
 }
 
 // Lookup returns a FileRecord by its full path.
@@ -493,9 +553,16 @@ func (idx *Indexer) updateStatus(update func(*ScanStatus)) {
 	idx.statusMu.Unlock()
 }
 
-func matchesQuery(record FileRecord, query Query) bool {
-	if query.NameContains != "" {
-		if !strings.Contains(strings.ToLower(record.Name), strings.ToLower(query.NameContains)) {
+func matchesQuery(record FileRecord, query Query, matchName func(string) bool, allowedExts map[string]struct{}) bool {
+	if matchName != nil && !matchName(record.Name) {
+		return false
+	}
+	if len(allowedExts) > 0 {
+		ext := strings.ToLower(filepath.Ext(record.Name))
+		if ext == "" {
+			return false
+		}
+		if _, ok := allowedExts[ext]; !ok {
 			return false
 		}
 	}
@@ -512,6 +579,66 @@ func matchesQuery(record FileRecord, query Query) bool {
 		return false
 	}
 	return true
+}
+
+func buildNameMatcher(pattern string) func(string) bool {
+	trimmed := strings.TrimSpace(pattern)
+	if trimmed == "" {
+		return nil
+	}
+
+	lowered := strings.ToLower(trimmed)
+	if strings.ContainsAny(lowered, "*?") {
+		regexPattern := wildcardToRegex(lowered)
+		if regexPattern != "" {
+			if re, err := regexp.Compile("^" + regexPattern + "$"); err == nil {
+				return func(name string) bool {
+					return re.MatchString(strings.ToLower(name))
+				}
+			}
+		}
+	}
+
+	return func(name string) bool {
+		return strings.Contains(strings.ToLower(name), lowered)
+	}
+}
+
+func wildcardToRegex(pattern string) string {
+	if pattern == "" {
+		return ""
+	}
+	escaped := regexp.QuoteMeta(pattern)
+	escaped = strings.ReplaceAll(escaped, "\\*", ".*")
+	escaped = strings.ReplaceAll(escaped, "\\?", ".")
+	return escaped
+}
+
+func compareRecords(a, b FileRecord, field string) int {
+	switch strings.ToLower(field) {
+	case "size":
+		switch {
+		case a.Size < b.Size:
+			return -1
+		case a.Size > b.Size:
+			return 1
+		default:
+			return 0
+		}
+	case "modified", "time":
+		switch {
+		case a.ModTime.Before(b.ModTime):
+			return -1
+		case a.ModTime.After(b.ModTime):
+			return 1
+		default:
+			return 0
+		}
+	case "path":
+		return strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
+	default:
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	}
 }
 
 // ParseScanMode validates a scan mode string and falls back to the incremental mode when empty.

@@ -13,58 +13,112 @@
         <p class="sf-tagline">极速检索与下载 Linux 文件</p>
     </header>
     <main class="sf-main">
-        <section class="sf-scan">
-            <div class="sf-scan-header">
-                <div>
-                    <h2>扫描控制</h2>
-                    <p class="sf-scan-subtitle">随时启动增量或全量扫描，并查看实时进度</p>
-                </div>
-                <div class="sf-scan-actions">
-                    <button type="button" id="scan-incremental">增量扫描</button>
-                    <button type="button" id="scan-full">全量重建</button>
-                </div>
-            </div>
-            <div id="scan-status" class="sf-scan-status">
-                <p>正在加载扫描状态...</p>
-            </div>
-        </section>
-        <section class="sf-search">
-            <form id="search-form">
-                <div class="sf-field">
-                    <label for="query">关键字</label>
-                    <input id="query" name="query" type="search" placeholder="文件名关键字" />
-                </div>
-                <div class="sf-field-group">
-                    <div class="sf-field">
-                        <label for="min-size">最小大小 (字节)</label>
-                        <input id="min-size" name="minSize" type="number" min="0" />
+        <div class="sf-layout">
+            <aside class="sf-side">
+                <section class="sf-scan">
+                    <div class="sf-scan-header">
+                        <div>
+                            <h2>扫描控制</h2>
+                            <p class="sf-scan-subtitle">启动增量或全量扫描，并实时掌握进度</p>
+                        </div>
+                        <div class="sf-scan-actions">
+                            <button type="button" id="scan-incremental">增量扫描</button>
+                            <button type="button" id="scan-full">全量重建</button>
+                        </div>
                     </div>
-                    <div class="sf-field">
-                        <label for="max-size">最大大小 (字节)</label>
-                        <input id="max-size" name="maxSize" type="number" min="0" />
+                    <div id="scan-status" class="sf-scan-status">
+                        <p>正在加载扫描状态...</p>
+                    </div>
+                </section>
+            </aside>
+            <section class="sf-content">
+                <div class="sf-search-card">
+                    <div class="sf-search-header">
+                        <h2>文件检索</h2>
+                        <p class="sf-hint">支持使用 <code>*</code> 和 <code>?</code> 通配符，例如：<code>*.log</code>、<code>report_??.pdf</code></p>
+                    </div>
+                    <form id="search-form" class="sf-search-form">
+                        <div class="sf-field">
+                            <label for="query">关键字</label>
+                            <input id="query" name="query" type="search" placeholder="输入文件名或通配符" />
+                        </div>
+                        <div class="sf-field-group">
+                            <div class="sf-field">
+                                <label for="min-size">最小大小 (字节)</label>
+                                <input id="min-size" name="minSize" type="number" min="0" />
+                            </div>
+                            <div class="sf-field">
+                                <label for="max-size">最大大小 (字节)</label>
+                                <input id="max-size" name="maxSize" type="number" min="0" />
+                            </div>
+                        </div>
+                        <div class="sf-field">
+                            <span class="sf-field-label">文件类别</span>
+                            <div class="sf-checkbox-group">
+                                <label><input type="checkbox" name="category" value="documents" /> 文档</label>
+                                <label><input type="checkbox" name="category" value="images" /> 图片</label>
+                                <label><input type="checkbox" name="category" value="audio" /> 音频</label>
+                                <label><input type="checkbox" name="category" value="video" /> 视频</label>
+                            </div>
+                        </div>
+                        <div class="sf-form-actions">
+                            <button type="submit">立即检索</button>
+                        </div>
+                    </form>
+                </div>
+                <div class="sf-results">
+                    <div class="sf-results-toolbar">
+                        <div class="sf-page-size">
+                            <label for="page-size">每页显示</label>
+                            <select id="page-size">
+                                <option value="10">10</option>
+                                <option value="20" selected>20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                        <div class="sf-results-info" id="pagination-info">共 0 条记录</div>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>
+                                    <button type="button" class="sf-sort-button" data-sort-field="name" aria-sort="none">
+                                        文件名<span class="sf-sort-indicator" aria-hidden="true"></span>
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="sf-sort-button" data-sort-field="path" aria-sort="none">
+                                        路径<span class="sf-sort-indicator" aria-hidden="true"></span>
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="sf-sort-button" data-sort-field="size" aria-sort="none">
+                                        大小<span class="sf-sort-indicator" aria-hidden="true"></span>
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="sf-sort-button" data-sort-field="modified" aria-sort="none">
+                                        修改时间<span class="sf-sort-indicator" aria-hidden="true"></span>
+                                    </button>
+                                </th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-body">
+                            <tr>
+                                <td colspan="5" class="placeholder">请先检索文件</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="sf-pagination">
+                        <button type="button" id="pagination-prev" disabled>上一页</button>
+                        <span class="sf-pagination-status" id="pagination-status">第 1 / 1 页</span>
+                        <button type="button" id="pagination-next" disabled>下一页</button>
                     </div>
                 </div>
-                <button type="submit">检索</button>
-            </form>
-        </section>
-        <section class="sf-results">
-            <table>
-                <thead>
-                    <tr>
-                        <th>文件名</th>
-                        <th>路径</th>
-                        <th>大小</th>
-                        <th>修改时间</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="results-body">
-                    <tr>
-                        <td colspan="5" class="placeholder">请先检索文件</td>
-                    </tr>
-                </tbody>
-            </table>
-        </section>
+            </section>
+        </div>
     </main>
     <footer class="sf-footer">
         <small>© {{.Year}} SeekFile</small>
@@ -73,18 +127,33 @@
     (function() {
         const form = document.getElementById('search-form');
         const tbody = document.getElementById('results-body');
+        const paginationInfo = document.getElementById('pagination-info');
+        const paginationStatus = document.getElementById('pagination-status');
+        const paginationPrev = document.getElementById('pagination-prev');
+        const paginationNext = document.getElementById('pagination-next');
+        const pageSizeSelect = document.getElementById('page-size');
+        const sortButtons = document.querySelectorAll('.sf-sort-button');
         const scanStatusBox = document.getElementById('scan-status');
         const incrementalButton = document.getElementById('scan-incremental');
         const fullButton = document.getElementById('scan-full');
         let statusTimer = null;
 
+        const state = {
+            page: 1,
+            pageSize: parseInt(pageSizeSelect.value, 10) || 20,
+            sortField: 'name',
+            sortOrder: 'asc',
+            total: 0,
+            totalPages: 0
+        };
+
         function formatSize(bytes) {
-            if (bytes === 0) return '0 B';
+            if (!bytes) return '0 B';
             const units = ['B', 'KB', 'MB', 'GB', 'TB'];
             const k = 1024;
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
             const value = bytes / Math.pow(k, i);
-            return value.toFixed(1) + ' ' + units[i];
+            return value.toFixed(value < 10 && i > 0 ? 2 : 1) + ' ' + units[i];
         }
 
         function formatDate(value) {
@@ -100,15 +169,29 @@
             return date.toLocaleString();
         }
 
+        function ensurePageSizeOption(value) {
+            if (!value) return;
+            const stringValue = String(value);
+            const hasOption = Array.from(pageSizeSelect.options).some(option => option.value === stringValue);
+            if (!hasOption) {
+                const option = document.createElement('option');
+                option.value = stringValue;
+                option.textContent = stringValue;
+                pageSizeSelect.appendChild(option);
+            }
+            pageSizeSelect.value = stringValue;
+        }
+
         function renderRows(files) {
             tbody.innerHTML = '';
-            if (!files.length) {
+            if (!Array.isArray(files) || !files.length) {
                 const row = document.createElement('tr');
                 row.innerHTML = '<td colspan="5" class="placeholder">未找到匹配文件</td>';
                 tbody.appendChild(row);
                 return;
             }
 
+            const fragment = document.createDocumentFragment();
             files.forEach(file => {
                 const row = document.createElement('tr');
                 const link = `/api/download?path=${encodeURIComponent(file.path)}`;
@@ -119,8 +202,110 @@
                     <td data-label="修改时间">${formatDate(file.modified)}</td>
                     <td data-label="操作"><a href="${link}" download>下载</a></td>
                 `;
-                tbody.appendChild(row);
+                fragment.appendChild(row);
             });
+            tbody.appendChild(fragment);
+        }
+
+        function updatePaginationMeta(data) {
+            if (typeof data.pageSize === 'number' && data.pageSize > 0) {
+                state.pageSize = data.pageSize;
+                ensurePageSizeOption(state.pageSize);
+            }
+            if (typeof data.page === 'number' && data.page > 0) {
+                state.page = data.page;
+            }
+            if (typeof data.total === 'number' && data.total >= 0) {
+                state.total = data.total;
+            }
+            if (typeof data.totalPages === 'number' && data.totalPages >= 0) {
+                state.totalPages = data.totalPages;
+            } else if (state.pageSize > 0) {
+                state.totalPages = Math.ceil(state.total / state.pageSize);
+            }
+            if (typeof data.sort === 'string' && data.sort) {
+                state.sortField = data.sort;
+            }
+            if (typeof data.order === 'string' && data.order) {
+                state.sortOrder = data.order.toLowerCase() === 'desc' ? 'desc' : 'asc';
+            }
+        }
+
+        function updatePaginationControls() {
+            const totalPages = state.totalPages || (state.pageSize > 0 ? Math.ceil(state.total / state.pageSize) : 0);
+            state.totalPages = totalPages;
+            const displayTotalPages = totalPages > 0 ? totalPages : 1;
+            const displayPage = totalPages > 0 ? Math.min(state.page, totalPages) : 1;
+
+            paginationInfo.textContent = `共 ${state.total} 条记录`;
+            paginationStatus.textContent = `第 ${displayPage} / ${displayTotalPages} 页`;
+
+            const disablePrev = displayPage <= 1 || totalPages <= 1;
+            const disableNext = totalPages <= 1 || displayPage >= totalPages;
+            paginationPrev.disabled = disablePrev;
+            paginationNext.disabled = disableNext;
+        }
+
+        function updateSortIndicators() {
+            sortButtons.forEach(button => {
+                const field = button.dataset.sortField;
+                const isActive = field === state.sortField;
+                button.dataset.sortActive = isActive ? 'true' : 'false';
+                button.dataset.sortOrder = isActive ? state.sortOrder : '';
+                button.setAttribute('aria-sort', isActive ? (state.sortOrder === 'desc' ? 'descending' : 'ascending') : 'none');
+                const indicator = button.querySelector('.sf-sort-indicator');
+                if (indicator) {
+                    indicator.textContent = isActive ? (state.sortOrder === 'desc' ? '↓' : '↑') : '';
+                }
+            });
+        }
+
+        function buildSearchParams() {
+            const params = new URLSearchParams();
+            const formData = new FormData(form);
+            formData.forEach((value, key) => {
+                if (!value) return;
+                if (key === 'category') {
+                    params.append(key, value);
+                } else {
+                    params.set(key, value);
+                }
+            });
+            params.set('page', state.page);
+            params.set('pageSize', state.pageSize);
+            params.set('sort', state.sortField);
+            params.set('order', state.sortOrder);
+            return params;
+        }
+
+        function performSearch(options = {}) {
+            if (options.resetPage) {
+                state.page = 1;
+            }
+
+            paginationInfo.textContent = '正在检索...';
+            paginationStatus.textContent = '';
+            paginationPrev.disabled = true;
+            paginationNext.disabled = true;
+            tbody.innerHTML = '<tr><td colspan="5" class="placeholder">正在检索...</td></tr>';
+
+            const params = buildSearchParams();
+            fetch('/api/search?' + params.toString())
+                .then(response => {
+                    if (!response.ok) throw new Error('搜索失败');
+                    return response.json();
+                })
+                .then(data => {
+                    updatePaginationMeta(data || {});
+                    renderRows((data && data.files) || []);
+                    updatePaginationControls();
+                    updateSortIndicators();
+                })
+                .catch(error => {
+                    tbody.innerHTML = '<tr><td colspan="5" class="error">' + error.message + '</td></tr>';
+                    paginationInfo.textContent = '检索失败';
+                    paginationStatus.textContent = '';
+                });
         }
 
         function setScanButtonsDisabled(disabled) {
@@ -200,21 +385,44 @@
 
         form.addEventListener('submit', function(event) {
             event.preventDefault();
-            const formData = new FormData(form);
-            const params = new URLSearchParams();
-            for (const [key, value] of formData.entries()) {
-                if (value) params.append(key, value);
-            }
+            performSearch({ resetPage: true });
+        });
 
-            fetch('/api/search?' + params.toString())
-                .then(response => {
-                    if (!response.ok) throw new Error('搜索失败');
-                    return response.json();
-                })
-                .then(data => renderRows(data.files || []))
-                .catch(error => {
-                    tbody.innerHTML = '<tr><td colspan="5" class="error">' + error.message + '</td></tr>';
-                });
+        pageSizeSelect.addEventListener('change', function() {
+            const value = parseInt(this.value, 10);
+            if (!Number.isNaN(value)) {
+                state.pageSize = value;
+                performSearch({ resetPage: true });
+            }
+        });
+
+        paginationPrev.addEventListener('click', function() {
+            if (state.page > 1) {
+                state.page -= 1;
+                performSearch();
+            }
+        });
+
+        paginationNext.addEventListener('click', function() {
+            if (state.totalPages === 0 || state.page >= state.totalPages) {
+                return;
+            }
+            state.page += 1;
+            performSearch();
+        });
+
+        sortButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const field = this.dataset.sortField;
+                if (!field) return;
+                if (state.sortField === field) {
+                    state.sortOrder = state.sortOrder === 'asc' ? 'desc' : 'asc';
+                } else {
+                    state.sortField = field;
+                    state.sortOrder = 'asc';
+                }
+                performSearch({ resetPage: true });
+            });
         });
 
         incrementalButton.addEventListener('click', function() {
@@ -225,6 +433,7 @@
             triggerScan('full');
         });
 
+        updateSortIndicators();
         fetchScanStatus();
         statusTimer = setInterval(fetchScanStatus, 5000);
     })();
